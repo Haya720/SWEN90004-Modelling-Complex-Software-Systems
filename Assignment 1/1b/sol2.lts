@@ -1,0 +1,93 @@
+// Name: Hongyao Wei
+// ID: 741027
+
+const Empty = 0	// the state if segment does not have bike on it
+const BikeTag = 1	// the state if bike on segment is tagged
+const BikeUntag = 2	// the state if bike on segment is untagged
+const Free = 0	// the state if inspector is free
+const Busy = 1	// the state if inspector is busy
+
+range State = Empty..BikeUntag	// the possible states of segment with bike
+range StateInsp = Free..Busy	// the possible states of inspector
+
+// The producer process has one action arrive
+PRODUCER = ( arrive -> PRODUCER ).
+
+// The consumer1 process has one action depart bike from long belt
+CONSUMER1 = ( belt1_depart -> CONSUMER1 ).
+
+// The consumer2 process has one action depart bike from short belt
+CONSUMER2 = ( belt2_depart -> CONSUMER2 ).
+
+// The sensor process has one action sense
+SENSOR = ( sense -> SENSOR ).
+
+// The long belt process with five segments
+BELT = BELT[Empty][Empty][Empty][Empty][Empty],
+BELT[s1:State][s2:State][s3:State][s4:State][s5:State] = 
+(
+	 // when segment 1 is empty, then put tagged/untagged bike on it
+	 when(s1 == Empty) arrive -> 
+		(
+		  tagged_bike -> BELT[BikeTag][s2][s3][s4][s5]
+		 |nontag_bike -> BELT[BikeUntag][s2][s3][s4][s5]
+		)
+	 // when segment 5 has bike, get bike from long belt by using consumer 1
+	|when(s5 != Empty) belt1_depart -> BELT[s1][s2][s3][s4][Empty]
+	 // move segments only if belt is not empty and no bike on segment(avoid dropping) and segment 3 is empty
+	|when((s1 != Empty || s2 != Empty || s3 != Empty || s4 != Empty || s5 != Empty) && (s5 == Empty) && (s3 == Empty)) move -> BELT[Empty][s1][s2][s3][s4]
+	 // when segment 3 has bike on it, sense it is tagged or untagged
+	|when(s3 != Empty) sense -> 
+		( // if bike is untagged, keep moving to next segment
+		  when(s3 == BikeUntag) move -> BELT[Empty][s1][s2][s3][s4]
+		  // if bike is tagged, call robot to transmit it to inspector
+		 |when(s3 == BikeTag) pickup -> BELT[s1][s2][Empty][s4][s5]
+		)
+).
+
+
+// The short belt process with two segments
+BELTS = BELTS[Empty][Empty],
+BELTS[s1:State][s2:State] = 
+(	 // when segment 1 is empty, the robot can transmit inspected bike from inspector to short belt
+	 when(s1 == Empty) putbike_to_belt2 -> BELTS[BikeUntag][s2]
+	 // when segment 2 has bike, call consumer 2 to depart bike 
+	|when(s2 != Empty) belt2_depart -> BELTS[s1][Empty]
+	 // if short belt is not empty and no bike on segment 2, then belt can move
+	|when((s1 != Empty || s2 != Empty) && (s2 == Empty)) belt2_move -> BELTS[Empty][s1]
+).
+
+
+// The robot process has two sets of actions
+ROBOT = 
+(	 // pickup bike from segment 3, set inspector busy and inspect bike 
+	 pickup -> set_insp_busy -> inspect -> ROBOT
+	 // return checked bike, first set inspector free then put bike to short belt
+	|return-> set_insp_free -> putbike_to_belt2 ->ROBOT
+).
+
+// The inspector process
+INSPECTOR = INSP[Free],
+INSP[i:StateInsp] = 
+(	 // inspect arrived bike, remove tag from bike, then return bike
+	 inspect -> removeTag -> return -> INSP[Busy]
+	 // if inspector is busy, set it free
+	|when(i == Busy) set_insp_free -> INSP[Free]
+	 // if inspector is free, set it busy
+	|when(i == Free) set_insp_busy -> INSP[Busy]
+).
+
+// Synchronized process 
+// add priority to fix the deadlock
+||SIM = ( PRODUCER || CONSUMER1 || CONSUMER2 || BELT || BELTS || SENSOR || ROBOT || INSPECTOR )<<{removeTag, return}.
+
+// Safety check
+// check save pickup of robot: moves bike from long belt to inspector
+property SAFE_PICKUP = (pickup -> set_insp_busy -> inspect -> SAFE_PICKUP).
+// check save return of robot: moves bike from inspector to short belt 
+property SAFE_RETURN = (return -> set_insp_free -> putbike_to_belt2 -> SAFE_RETURN).
+
+
+||SAFE_CHECK = (SIM || SAFE_PICKUP || SAFE_RETURN).
+
+
